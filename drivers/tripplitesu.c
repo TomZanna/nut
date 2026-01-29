@@ -102,8 +102,10 @@
 	load.off
 	load.on
 	shutdown.reboot - Note: can power on a UPS that is currently off
+	                  Optional parameter: "shutdown_delay" or "shutdown_delay.reboot_delay"
 	shutdown.reboot.graceful - Note: can power on a UPS that is currently off
-	shutdown.return
+	                           Optional parameter: "shutdown_delay" or "shutdown_delay.reboot_delay"
+	shutdown.return - Optional parameter: "shutdown_delay" or "shutdown_delay.reboot_delay"
 	shutdown.stop
 	test.battery.start
 	test.battery.stop
@@ -478,6 +480,50 @@ static void set_sensitivity(const char *val) {
 	}
 }
 
+/* Helper function to parse delay parameters from extra argument
+ * Format: "shutdown_delay" or "shutdown_delay.reboot_delay"
+ * Returns: 1 if successfully parsed, 0 otherwise
+ * 
+ * If extra is NULL or empty, returns 0 (use defaults from config)
+ * If only one value is provided, it's used as shutdown_delay
+ * If two values separated by '.', first is shutdown_delay, second is reboot_delay
+ */
+static int parse_delay_args(const char *extra, int *parsed_shutdown_delay, int *parsed_reboot_delay)
+{
+	char *endptr;
+	long temp;
+	
+	if (!extra || *extra == '\0') {
+		return 0;  /* Use defaults from config */
+	}
+	
+	/* Parse first value (shutdown delay in seconds) */
+	temp = strtol(extra, &endptr, 10);
+	if (endptr == extra || temp < 1) {
+		upsdebugx(2, "parse_delay_args: invalid shutdown_delay in extra parameter: %s", extra);
+		return 0;  /* Invalid, use defaults */
+	}
+	*parsed_shutdown_delay = (int)temp;
+	
+	/* Check if there's a second value (reboot delay in minutes) */
+	if (*endptr == '.') {
+		extra = endptr + 1;
+		temp = strtol(extra, &endptr, 10);
+		if (endptr == extra || temp < 1) {
+			upsdebugx(2, "parse_delay_args: invalid reboot_delay in extra parameter: %s", extra);
+			return 0;  /* Invalid, use defaults */
+		}
+		*parsed_reboot_delay = (int)temp;
+	} else {
+		/* Only shutdown delay provided, use configured reboot_delay */
+		*parsed_reboot_delay = reboot_delay;
+	}
+	
+	upsdebugx(2, "parse_delay_args: parsed shutdown_delay=%d seconds, reboot_delay=%d minutes", 
+		*parsed_shutdown_delay, *parsed_reboot_delay);
+	return 1;  /* Successfully parsed */
+}
+
 static void auto_reboot(int enable) {
 	char parm[20];
 	char response[MAX_RESPONSE_LENGTH];
@@ -501,9 +547,9 @@ static int instcmd(const char *cmdname, const char *extra)
 {
 	int i;
 	char parm[20];
+	int cmd_shutdown_delay;
+	int cmd_reboot_delay;
 
-	/* May be used in logging below, but not as a command argument */
-	NUT_UNUSED_VARIABLE(extra);
 	upsdebug_INSTCMD_STARTING(cmdname, extra);
 
 	if (!strcasecmp(cmdname, "load.off")) {
@@ -525,29 +571,57 @@ static int instcmd(const char *cmdname, const char *extra)
 	if (!strcasecmp(cmdname, "shutdown.reboot")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		snprintf(parm, sizeof(parm), "%d", reboot_delay);
-		do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
-		snprintf(parm, sizeof(parm), "%d", shutdown_delay);
-		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		
+		/* Parse delays from extra parameter, or use configured defaults */
+		if (parse_delay_args(extra, &cmd_shutdown_delay, &cmd_reboot_delay)) {
+			snprintf(parm, sizeof(parm), "%d", cmd_reboot_delay);
+			do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+			snprintf(parm, sizeof(parm), "%d", cmd_shutdown_delay);
+			do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		} else {
+			snprintf(parm, sizeof(parm), "%d", reboot_delay);
+			do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+			snprintf(parm, sizeof(parm), "%d", shutdown_delay);
+			do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		}
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.reboot.graceful")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		snprintf(parm, sizeof(parm), "%d", reboot_delay);
-		do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
-		/* Use 60 seconds for graceful shutdown as before, or a larger value if shutdown_delay is configured higher */
-		snprintf(parm, sizeof(parm), "%d", shutdown_delay > 60 ? shutdown_delay : 60);
-		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		
+		/* Parse delays from extra parameter, or use configured defaults */
+		if (parse_delay_args(extra, &cmd_shutdown_delay, &cmd_reboot_delay)) {
+			snprintf(parm, sizeof(parm), "%d", cmd_reboot_delay);
+			do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+			/* Use 60 seconds for graceful shutdown as minimum, or configured/parsed value if higher */
+			snprintf(parm, sizeof(parm), "%d", cmd_shutdown_delay > 60 ? cmd_shutdown_delay : 60);
+			do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		} else {
+			snprintf(parm, sizeof(parm), "%d", reboot_delay);
+			do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+			/* Use 60 seconds for graceful shutdown as before, or a larger value if shutdown_delay is configured higher */
+			snprintf(parm, sizeof(parm), "%d", shutdown_delay > 60 ? shutdown_delay : 60);
+			do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		}
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.return")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		snprintf(parm, sizeof(parm), "%d", reboot_delay);
-		do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
-		snprintf(parm, sizeof(parm), "%d", shutdown_delay);
-		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		
+		/* Parse delays from extra parameter, or use configured defaults */
+		if (parse_delay_args(extra, &cmd_shutdown_delay, &cmd_reboot_delay)) {
+			snprintf(parm, sizeof(parm), "%d", cmd_reboot_delay);
+			do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+			snprintf(parm, sizeof(parm), "%d", cmd_shutdown_delay);
+			do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		} else {
+			snprintf(parm, sizeof(parm), "%d", reboot_delay);
+			do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+			snprintf(parm, sizeof(parm), "%d", shutdown_delay);
+			do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
+		}
 		return STAT_INSTCMD_HANDLED;
 	}
 #if 0 /* doesn't seem to work */

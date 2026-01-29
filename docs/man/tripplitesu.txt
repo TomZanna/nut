@@ -72,15 +72,31 @@ Shut down the load immediately, then restart it.
 +
 *Note:* This command can power on a UPS that is currently off, not just
 reboot a running UPS.
++
+Optional parameter: Specify custom delays as "shutdown_delay" (seconds) or 
+"shutdown_delay.reboot_delay" (shutdown in seconds, reboot in minutes). 
+Example: `upscmd ups shutdown.reboot 5.2` shuts down in 5 seconds and 
+reboots after 2 minutes.
 
 *shutdown.reboot.graceful*::
-Shut down the load after a 60-second delay, then restart it.
+Shut down the load after a delay (minimum 60 seconds), then restart it.
 +
 *Note:* This command can power on a UPS that is currently off, not just
 reboot a running UPS.
++
+Optional parameter: Specify custom delays as "shutdown_delay" (seconds) or 
+"shutdown_delay.reboot_delay" (shutdown in seconds, reboot in minutes). 
+The shutdown delay will be at least 60 seconds for graceful operation.
+Example: `upscmd ups shutdown.reboot.graceful 90.3` shuts down in 90 seconds 
+and reboots after 3 minutes.
 
 *shutdown.return*::
 Shut down the load immediately, then restart it when power returns.
++
+Optional parameter: Specify custom delays as "shutdown_delay" (seconds) or 
+"shutdown_delay.reboot_delay" (shutdown in seconds, reboot in minutes).
+Example: `upscmd ups shutdown.return 15.1` shuts down in 15 seconds and 
+reboots after 1 minute when power returns.
 
 *shutdown.stop*::
 Stop a pending shutdown.
