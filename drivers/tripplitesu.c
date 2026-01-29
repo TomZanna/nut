@@ -130,6 +130,8 @@
 #include "main.h"
 #include "serial.h"
 #include "nut_stdint.h"
+#include <errno.h>
+#include <limits.h>
 
 #define DRIVER_NAME	"Tripp Lite SmartOnline driver"
 #define DRIVER_VERSION	"0.12"
@@ -492,27 +494,44 @@ static int parse_delay_args(const char *extra, int *parsed_shutdown_delay, int *
 {
 	char *endptr;
 	long temp;
+	const char *reboot_str;
 	
 	if (!extra || *extra == '\0') {
 		return 0;  /* Use defaults from config */
 	}
 	
 	/* Parse first value (shutdown delay in seconds) */
+	errno = 0;
 	temp = strtol(extra, &endptr, 10);
-	if (endptr == extra || temp < 1) {
+	if (endptr == extra || temp < 1 || temp > INT_MAX || errno == ERANGE) {
 		upsdebugx(2, "parse_delay_args: invalid shutdown_delay in extra parameter: %s", extra);
 		return 0;  /* Invalid, use defaults */
 	}
+	
+	/* Verify no trailing garbage before separator or end of string */
+	if (*endptr != '\0' && *endptr != '.') {
+		upsdebugx(2, "parse_delay_args: invalid format in extra parameter: %s", extra);
+		return 0;  /* Invalid, use defaults */
+	}
+	
 	*parsed_shutdown_delay = (int)temp;
 	
 	/* Check if there's a second value (reboot delay in minutes) */
 	if (*endptr == '.') {
-		extra = endptr + 1;
-		temp = strtol(extra, &endptr, 10);
-		if (endptr == extra || temp < 1) {
+		reboot_str = endptr + 1;
+		errno = 0;
+		temp = strtol(reboot_str, &endptr, 10);
+		if (endptr == reboot_str || temp < 1 || temp > INT_MAX || errno == ERANGE) {
 			upsdebugx(2, "parse_delay_args: invalid reboot_delay in extra parameter: %s", extra);
 			return 0;  /* Invalid, use defaults */
 		}
+		
+		/* Verify no trailing garbage after the second value */
+		if (*endptr != '\0') {
+			upsdebugx(2, "parse_delay_args: invalid format in extra parameter: %s", extra);
+			return 0;  /* Invalid, use defaults */
+		}
+		
 		*parsed_reboot_delay = (int)temp;
 	} else {
 		/* Only shutdown delay provided, use configured reboot_delay */
