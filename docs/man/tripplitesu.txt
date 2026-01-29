@@ -42,6 +42,19 @@ but with zero duration).
 +
 This delay helps prevent "read timeout" errors when the hardware buffer is
 not ready to accept new commands immediately after completing the previous one.
++
+*Note:* If a communication timeout is detected and command_delay is disabled (-1),
+the driver will automatically enable it with a 1-second delay and log a warning
+message.
+
+*shutdown_delay*='seconds'::
+Set the delay before shutdown in seconds (default: 5). This value is used when
+executing shutdown commands such as `shutdown.reboot`, `shutdown.return`, and
+during the driver's shutdown sequence.
+
+*reboot_delay*='minutes'::
+Set the delay before reboot in minutes (default: 1). This value is used when
+executing reboot commands such as `shutdown.reboot` and `shutdown.return`.
 
 INSTANT COMMANDS
 ----------------

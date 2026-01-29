@@ -67,6 +67,9 @@
    The following parameters (ups.conf) are supported:
 	lowbatt
 	command_delay - delay in microseconds before each command (default: -1 = disabled)
+	                automatically enabled (1 second) when timeout is detected
+	shutdown_delay - delay before shutdown, in seconds (default: 5)
+	reboot_delay - delay before reboot, in minutes (default: 1)
 
    The following variables are supported (RW = read/write):
 	ambient.humidity (1)
@@ -165,6 +168,9 @@ static struct {
 } ups;
 
 static long command_delay = -1; /* delay in microseconds before each command, -1 = disabled by default */
+static int command_delay_auto_enabled = 0; /* flag to track if command_delay was auto-enabled */
+static int shutdown_delay = 5; /* delay before shutdown, in seconds (default: 5) */
+static int reboot_delay = 1; /* delay before reboot, in minutes (default: 1) */
 
 /* bits in commands_available */
 #define WDG_AVAILABLE            (1UL <<  1)
@@ -252,6 +258,13 @@ static ssize_t do_command(char type, const char *command, const char *parameters
 	}
 	if (ret == 0) {
 		upsdebugx(3, "do_command: read -> TIMEOUT");
+		/* Auto-enable command_delay if it was disabled and we hit a timeout */
+		if (command_delay == -1 && !command_delay_auto_enabled) {
+			command_delay = 1000000; /* 1 second */
+			command_delay_auto_enabled = 1;
+			upslogx(LOG_WARNING, "Communication timeout detected, automatically enabling command_delay (1 second)");
+			upsdebugx(2, "Auto-enabled command_delay to 1000000 microseconds due to timeout");
+		}
 		return -1;
 	}
 
@@ -268,6 +281,13 @@ static ssize_t do_command(char type, const char *command, const char *parameters
 		}
 		if (ret == 0) {
 			upsdebugx(3, "do_command: read -> TIMEOUT");
+			/* Auto-enable command_delay if it was disabled and we hit a timeout */
+			if (command_delay == -1 && !command_delay_auto_enabled) {
+				command_delay = 1000000; /* 1 second */
+				command_delay_auto_enabled = 1;
+				upslogx(LOG_WARNING, "Communication timeout detected, automatically enabling command_delay (1 second)");
+				upsdebugx(2, "Auto-enabled command_delay to 1000000 microseconds due to timeout");
+			}
 			return -1;
 		}
 
@@ -302,6 +322,13 @@ static ssize_t do_command(char type, const char *command, const char *parameters
 		}
 		if (ret == 0) {
 			upsdebugx(3, "do_command: read -> TIMEOUT");
+			/* Auto-enable command_delay if it was disabled and we hit a timeout */
+			if (command_delay == -1 && !command_delay_auto_enabled) {
+				command_delay = 1000000; /* 1 second */
+				command_delay_auto_enabled = 1;
+				upslogx(LOG_WARNING, "Communication timeout detected, automatically enabling command_delay (1 second)");
+				upsdebugx(2, "Auto-enabled command_delay to 1000000 microseconds due to timeout");
+			}
 			return -1;
 		}
 
@@ -502,29 +529,37 @@ static int instcmd(const char *cmdname, const char *extra)
 	if (!strcasecmp(cmdname, "shutdown.reboot")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "10", NULL);
+		snprintf(parm, sizeof(parm), "%d", reboot_delay);
+		do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+		snprintf(parm, sizeof(parm), "%d", shutdown_delay);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.reboot.graceful")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "60", NULL);
+		snprintf(parm, sizeof(parm), "%d", reboot_delay);
+		do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+		/* Use 60 seconds for graceful shutdown as before, or a larger value if shutdown_delay is configured higher */
+		snprintf(parm, sizeof(parm), "%d", shutdown_delay > 60 ? shutdown_delay : 60);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.return")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "10", NULL);
+		snprintf(parm, sizeof(parm), "%d", reboot_delay);
+		do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
+		snprintf(parm, sizeof(parm), "%d", shutdown_delay);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 		return STAT_INSTCMD_HANDLED;
 	}
 #if 0 /* doesn't seem to work */
 	if (!strcasecmp(cmdname, "shutdown.stayoff")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(0);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "10", NULL);
+		snprintf(parm, sizeof(parm), "%d", shutdown_delay);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 		return STAT_INSTCMD_HANDLED;
 	}
 #endif
@@ -878,9 +913,9 @@ void upsdrv_shutdown(void)
 	auto_reboot(1);
 	/* in case the power is on, tell it to automatically reboot.  if
 	   it is off, this has no effect. */
-	snprintf(parm, sizeof(parm), "%d", 1); /* delay before reboot, in minutes */
+	snprintf(parm, sizeof(parm), "%d", reboot_delay); /* delay before reboot, in minutes */
 	do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
-	snprintf(parm, sizeof(parm), "%d", 5); /* delay before shutdown, in seconds */
+	snprintf(parm, sizeof(parm), "%d", shutdown_delay); /* delay before shutdown, in seconds */
 	do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 }
 
@@ -900,6 +935,10 @@ void upsdrv_makevartable(void)
 	addvar(VAR_VALUE, "command_delay", 
 		"Delay in microseconds before each command (default: -1 = disabled; "
 		"set to 1000000 for 1 second if experiencing communication timeouts)");
+	addvar(VAR_VALUE, "shutdown_delay",
+		"Delay before shutdown, in seconds (default: 5)");
+	addvar(VAR_VALUE, "reboot_delay",
+		"Delay before reboot, in minutes (default: 1)");
 }
 
 void upsdrv_initups(void)
@@ -927,6 +966,32 @@ void upsdrv_initups(void)
 		}
 	} else {
 		upsdebugx(2, "Using default command_delay of %ld (disabled)", command_delay);
+	}
+
+	/* Initialize shutdown_delay from configuration */
+	val = getval("shutdown_delay");
+	if (val) {
+		int temp = atoi(val);
+		if (temp < 0) {
+			fatalx(EXIT_FAILURE, "Invalid shutdown_delay parameter: %s (must be >= 0)", val);
+		}
+		shutdown_delay = temp;
+		upsdebugx(2, "Setting shutdown_delay to %d seconds", shutdown_delay);
+	} else {
+		upsdebugx(2, "Using default shutdown_delay of %d seconds", shutdown_delay);
+	}
+
+	/* Initialize reboot_delay from configuration */
+	val = getval("reboot_delay");
+	if (val) {
+		int temp = atoi(val);
+		if (temp < 0) {
+			fatalx(EXIT_FAILURE, "Invalid reboot_delay parameter: %s (must be >= 0)", val);
+		}
+		reboot_delay = temp;
+		upsdebugx(2, "Setting reboot_delay to %d minutes", reboot_delay);
+	} else {
+		upsdebugx(2, "Using default reboot_delay of %d minutes", reboot_delay);
 	}
 }
 
