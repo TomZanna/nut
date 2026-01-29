@@ -226,7 +226,7 @@ static ssize_t do_command(char type, const char *command, const char *parameters
 	ssize_t	ret;
 
 	/* Apply configurable delay if enabled (>= 0) to prevent communication timeouts */
-	if (command_delay >= 0) {
+	if (command_delay > 0) {
 		usleep((useconds_t)command_delay);
 	}
 	ser_flush_io(upsfd);
@@ -912,11 +912,21 @@ void upsdrv_initups(void)
 	/* Initialize command_delay from configuration */
 	val = getval("command_delay");
 	if (val) {
-		long lval = atol(val);
-		command_delay = lval;
-		upsdebugx(2, "Setting 'command_delay' to %ld microseconds", command_delay);
+		long temp = atol(val);
+		/* Allow -1 (disabled), 0 (no delay), or positive values up to useconds_t range */
+		if (temp < -1) {
+			fatalx(EXIT_FAILURE, "Invalid command_delay parameter: %s (must be >= -1)", val);
+		}
+		command_delay = temp;
+		if (command_delay == -1) {
+			upsdebugx(2, "command_delay is disabled (set to -1)");
+		} else if (command_delay == 0) {
+			upsdebugx(2, "command_delay is explicitly set to 0 (no delay)");
+		} else {
+			upsdebugx(2, "Setting command_delay to %ld microseconds", command_delay);
+		}
 	} else {
-		upsdebugx(2, "Using default 'command_delay' of %ld (disabled)", command_delay);
+		upsdebugx(2, "Using default command_delay of %ld (disabled)", command_delay);
 	}
 }
 

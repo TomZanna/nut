@@ -37,7 +37,8 @@ until there are only a few seconds left.  Common values are around 25--30.
 Set a delay in microseconds to be applied before each command sent to the UPS.
 The default value is -1 (disabled). If experiencing intermittent communication
 timeouts when multiple commands are sent in rapid succession, set this to
-1000000 (1 second) or adjust as needed. Set to 0 to explicitly disable.
+1000000 (1 second) or adjust as needed. Set to 0 for no delay (explicitly enabled
+but with zero duration).
 +
 This delay helps prevent "read timeout" errors when the hardware buffer is
 not ready to accept new commands immediately after completing the previous one.
