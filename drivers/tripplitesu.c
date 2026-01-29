@@ -47,14 +47,8 @@
    company (if either) originated the protocol.  Picking one of the
    companies arbitrarily to name it after just seems wrong.
 
-   There are a few things still to add.  Primarily there's control of
-   individual outlet banks, using (I presume) outlet.n.x variables.
-   I'll probably wait for an example of that to show up in some other
-   driver before adding that, to try to make sure I do it in the way
-   that Russell Kroll envisioned.  It also might be nice to give the
-   user control over the delays before shutdown and restart, probably
-   with additional driver parameters.  Letting the user turn the buzzer
-   off might be nice too; for that I'd have to investigate whether the
+   There are a few things still to add. Letting the user turn the buzzer
+   off might be nice; for that I'd have to investigate whether the
    command to do that disables it entirely, or just turns it off during
    the existing alarm condition, to determine whether it would be better
    implemented through variables or instant commands, and then of course
@@ -66,6 +60,9 @@
 
    The following parameters (ups.conf) are supported:
 	lowbatt
+	shutdown_delay
+	reboot_delay
+	command_delay
 
    The following variables are supported (RW = read/write):
 	ambient.humidity (1)
@@ -94,7 +91,7 @@
 	ups.test.result
 	ups.contacts (1)
 
-    The following instant commands are supported:
+   The following instant commands are supported:
 	load.off
 	load.on
 	shutdown.reboot
@@ -104,7 +101,7 @@
 	test.battery.start
 	test.battery.stop
 
-    The following ups.status values are supported:
+   The following ups.status values are supported:
 	BOOST (1)
 	BYPASS
 	LB
@@ -115,9 +112,9 @@
 	RB (2)
 	TRIM (1)
 
-    (1) these items have not been tested because they are not supported
-    by my SU1000RT2U.
-    (2) these items have not been tested because I haven't tested them.
+   (1) these items have not been tested because they are not supported
+   by my SU1000RT2U.
+   (2) these items have not been tested because I haven't tested them.
 */
 
 
@@ -126,7 +123,7 @@
 #include "nut_stdint.h"
 
 #define DRIVER_NAME	"Tripp Lite SmartOnline driver"
-#define DRIVER_VERSION	"0.11"
+#define DRIVER_VERSION	"0.12"
 
 /* driver description structure */
 upsdrv_info_t upsdrv_info = {
@@ -162,6 +159,10 @@ static struct {
 	int outlet_banks;
 	unsigned long commands_available;
 } ups;
+
+static long command_delay = -1; /* delay in milliseconds before each command, -1 = disabled by default */
+static int shutdown_delay = 10; /* delay before shutdown, in seconds (default: 10) */
+static int reboot_delay = 1; /* delay before reboot, in minutes (default: 1) */
 
 /* bits in commands_available */
 #define WDG_AVAILABLE            (1UL <<  1)
@@ -218,11 +219,28 @@ static struct {
 
 static ssize_t do_command(char type, const char *command, const char *parameters, char *response)
 {
+	static struct timespec last_cmd_time = {0, 0};
 	char	buffer[SMALLBUF];
 	size_t	count;
 	ssize_t	ret;
 
 	ser_flush_io(upsfd);
+
+	/* Apply configurable delay if enabled (> 0) to prevent communication timeouts */
+	if (command_delay > 0) {
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+
+		long long elapsed_ms = (long long)(now.tv_sec - last_cmd_time.tv_sec) * 1000 + 
+		(now.tv_nsec - last_cmd_time.tv_nsec) / 1000000;
+		
+		if (elapsed_ms < command_delay) {
+			long sleep_ms = command_delay - (long)elapsed_ms;
+			usleep((useconds_t)sleep_ms * 1000);
+		}
+		// Update last_cmd_time
+		clock_gettime(CLOCK_MONOTONIC, &last_cmd_time);
+	}
 
 	if (response) {
 		*response = '\0';
@@ -467,6 +485,16 @@ static void auto_reboot(int enable) {
 	}
 }
 
+static int check_is_number(const char *input, int max_val) {
+	// check input is not null
+	if (input is NULL)
+		return 0;
+
+	// check input is number
+	// check input is below max_val
+	fatalx(EXIT_FAILURE, "Invalid parameter: %s (must be integer >= 0)", input);
+}
+
 static int instcmd(const char *cmdname, const char *extra)
 {
 	int i;
@@ -478,49 +506,62 @@ static int instcmd(const char *cmdname, const char *extra)
 
 	if (!strcasecmp(cmdname, "load.off")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
-		for (i = 0; i < ups.outlet_banks; i++) {
-			snprintf(parm, sizeof(parm), "%d;1", i + 1);
-			do_command(SET, RELAY_OFF, parm, NULL);
+		if (check_is_number(extra, ups.outlet_banks))
+			do_command(SET, RELAY_OFF, extra, NULL);
+		else {
+			for (i = 0; i < ups.outlet_banks; i++) {
+				snprintf(parm, sizeof(parm), "%d;1", i + 1);
+				do_command(SET, RELAY_OFF, parm, NULL);
+			}
 		}
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "load.on")) {
 		upslog_INSTCMD_POWERSTATE_MAYBE(cmdname, extra);
-		for (i = 0; i < ups.outlet_banks; i++) {
-			snprintf(parm, sizeof(parm), "%d;1", i + 1);
-			do_command(SET, RELAY_ON, parm, NULL);
+
+		if (check_is_number(extra, ups.outlet_banks))
+			do_command(SET, RELAY_ON, extra, NULL);
+		else {
+			for (i = 0; i < ups.outlet_banks; i++) {
+				snprintf(parm, sizeof(parm), "%d;1", i + 1);
+				do_command(SET, RELAY_ON, parm, NULL);
+			}
 		}
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.reboot")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "10", NULL);
+
+		do_command(SET, TSU_SHUTDOWN_RESTART, "0", NULL); // instant reboot
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.reboot.graceful")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "60", NULL);
+		if (check_is_number(extra, MAX_DELAY))
+			do_command(SET, TSU_SHUTDOWN_RESTART, extra, NULL); // from cmdline
+		else
+			do_command(SET, TSU_SHUTDOWN_RESTART, reboot_delay, NULL); // from config
+
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.return")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
-		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "10", NULL);
+		// do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL); // why???? failsafe maybe???
+		snprintf(parm, sizeof(parm), "%d", shutdown_delay);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL); // from config
 		return STAT_INSTCMD_HANDLED;
 	}
-#if 0 /* doesn't seem to work */
+
 	if (!strcasecmp(cmdname, "shutdown.stayoff")) {
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(0);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "10", NULL);
+		snprintf(parm, sizeof(parm), "%d", shutdown_delay);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL); // from config
 		return STAT_INSTCMD_HANDLED;
 	}
-#endif
 	if (!strcasecmp(cmdname, "shutdown.stop")) {
 		upslog_INSTCMD_POWERSTATE_MAYBE(cmdname, extra);
 		do_command(SET, TSU_SHUTDOWN_ACTION, "0", NULL);
@@ -686,9 +727,7 @@ void upsdrv_initinfo(void)
 	dstate_addcmd("shutdown.reboot");
 	dstate_addcmd("shutdown.reboot.graceful");
 	dstate_addcmd("shutdown.return");
-#if 0 /* doesn't work */
 	dstate_addcmd("shutdown.stayoff");
-#endif
 	dstate_addcmd("shutdown.stop");
 	dstate_addcmd("test.battery.start");
 	dstate_addcmd("test.battery.stop");
@@ -870,7 +909,7 @@ void upsdrv_shutdown(void)
 		printf("Status failed.  Assuming it's on battery and trying a shutdown anyway.\n");
 	auto_reboot(1);
 	/* in case the power is on, tell it to automatically reboot.  if
-	   it is off, this has no effect. */
+	   it is off, it is powered on. */
 	snprintf(parm, sizeof(parm), "%d", 1); /* delay before reboot, in minutes */
 	do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
 	snprintf(parm, sizeof(parm), "%d", 5); /* delay before shutdown, in seconds */
@@ -890,12 +929,67 @@ void upsdrv_tweak_prognames(void)
 void upsdrv_makevartable(void)
 {
 	addvar(VAR_VALUE, "lowbatt", "Set low battery level, in percent");
+	addvar(VAR_VALUE, "command_delay", 
+		"Delay in milliseconds before each command (default: -1 = disabled; "
+		"set to 1000ms if experiencing communication timeouts)");
+	addvar(VAR_VALUE, "shutdown_delay", "Delay before shutdown, in seconds");
+	addvar(VAR_VALUE, "reboot_delay", "Delay before reboot, in minutes");
 }
 
 void upsdrv_initups(void)
 {
+	const char *val;
+
 	upsfd = ser_open(device_path);
 	ser_set_speed(upsfd, device_path, B2400);
+
+	/* Initialize command_delay from configuration */
+	val = getval("command_delay");
+	if (val) {
+		long temp = atol(val);
+		/* Allow -1 (disabled), 0 (no delay), or positive values up to useconds_t range */
+		if (temp < -1) {
+			fatalx(EXIT_FAILURE, "Invalid command_delay parameter: %s (must be >= -1)", val);
+		}
+		command_delay = temp;
+		if (command_delay == -1) {
+			upsdebugx(2, "command_delay is disabled (set to -1)");
+		} else if (command_delay == 0) {
+			upsdebugx(2, "command_delay is explicitly set to 0 (no delay)");
+		} else {
+			upsdebugx(2, "Setting command_delay to %ld milliseconds", command_delay);
+		}
+	} else {
+		upsdebugx(2, "Using default command_delay of %ld (disabled)", command_delay);
+	}
+
+	/* Initialize shutdown_delay from configuration */
+	val = getval("shutdown_delay");
+	if (val) {
+		char *endptr;
+		long temp = strtol(val, &endptr, 10);
+		if (endptr == val || *endptr != '\0' || temp < 1) {
+			fatalx(EXIT_FAILURE, "Invalid shutdown_delay parameter: %s (must be >= 1 second)", val);
+		}
+		shutdown_delay = (int)temp;
+		upsdebugx(2, "Setting shutdown_delay to %d seconds", shutdown_delay);
+	} else {
+		upsdebugx(2, "Using default shutdown_delay of %d seconds", shutdown_delay);
+	}
+
+	/* Initialize reboot_delay from configuration */
+	val = getval("reboot_delay");
+	if (val) {
+		char *endptr;
+		long temp = strtol(val, &endptr, 10);
+		if (endptr == val || *endptr != '\0' || temp < 1) {
+			fatalx(EXIT_FAILURE, "Invalid reboot_delay parameter: %s (must be >= 1 minute)", val);
+		}
+		reboot_delay = (int)temp;
+		upsdebugx(2, "Setting reboot_delay to %d minutes", reboot_delay);
+	} else {
+		upsdebugx(2, "Using default reboot_delay of %d minutes", reboot_delay);
+	}
 }
 
 void upsdrv_cleanup(void)

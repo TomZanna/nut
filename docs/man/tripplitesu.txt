@@ -33,6 +33,25 @@ Set the low battery warning threshold in percent at which shutdown is
 initiated by linkman:upsmon[8].  By default, the UPS may not report low battery
 until there are only a few seconds left.  Common values are around 25--30.
 
+*command_delay*='milliseconds'::
+Set a delay in milliseconds to be applied before each command sent to the UPS.
+The default value is -1 (disabled). If experiencing intermittent communication
+timeouts when multiple commands are sent in rapid succession, set this to
+1000 (1 second) or adjust as needed. Set to 0 for no delay (explicitly enabled
+but with zero duration).
+
+This delay helps prevent "read timeout" errors when the hardware buffer is
+not ready to accept new commands immediately after completing the previous one.
+
+*shutdown_delay*='seconds'::
+Set the delay before shutdown in seconds (default: 10). This value is used when
+executing shutdown commands such as `shutdown.return`, `shutdown.stayoff`, and
+during the driver's shutdown sequence. Minimum value is 1 second.
+
+*reboot_delay*='minutes'::
+Set the delay before reboot in minutes (default: 1). This value is used when
+executing `shutdown.reboot.graceful`. Minimum value is 1 minute.
+
 AUTHOR
 ------
 
