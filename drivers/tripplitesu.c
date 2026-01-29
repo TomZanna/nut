@@ -66,6 +66,7 @@
 
    The following parameters (ups.conf) are supported:
 	lowbatt
+	command_delay - delay in microseconds before each command (default: -1 = disabled)
 
    The following variables are supported (RW = read/write):
 	ambient.humidity (1)
@@ -97,8 +98,8 @@
     The following instant commands are supported:
 	load.off
 	load.on
-	shutdown.reboot
-	shutdown.reboot.graceful
+	shutdown.reboot - Note: can power on a UPS that is currently off
+	shutdown.reboot.graceful - Note: can power on a UPS that is currently off
 	shutdown.return
 	shutdown.stop
 	test.battery.start
@@ -163,6 +164,8 @@ static struct {
 	unsigned long commands_available;
 } ups;
 
+static long command_delay = -1; /* delay in microseconds before each command, -1 = disabled by default */
+
 /* bits in commands_available */
 #define WDG_AVAILABLE            (1UL <<  1)
 
@@ -222,7 +225,10 @@ static ssize_t do_command(char type, const char *command, const char *parameters
 	size_t	count;
 	ssize_t	ret;
 
-	usleep(1E6);
+	/* Apply configurable delay if enabled (>= 0) to prevent communication timeouts */
+	if (command_delay >= 0) {
+		usleep((useconds_t)command_delay);
+	}
 	ser_flush_io(upsfd);
 
 	if (response) {
@@ -891,12 +897,27 @@ void upsdrv_tweak_prognames(void)
 void upsdrv_makevartable(void)
 {
 	addvar(VAR_VALUE, "lowbatt", "Set low battery level, in percent");
+	addvar(VAR_VALUE, "command_delay", 
+		"Delay in microseconds before each command (default: -1 = disabled; "
+		"set to 1000000 for 1 second if experiencing communication timeouts)");
 }
 
 void upsdrv_initups(void)
 {
+	const char *val;
+
 	upsfd = ser_open(device_path);
 	ser_set_speed(upsfd, device_path, B2400);
+
+	/* Initialize command_delay from configuration */
+	val = getval("command_delay");
+	if (val) {
+		long lval = atol(val);
+		command_delay = lval;
+		upsdebugx(2, "Setting 'command_delay' to %ld microseconds", command_delay);
+	} else {
+		upsdebugx(2, "Using default 'command_delay' of %ld (disabled)", command_delay);
+	}
 }
 
 void upsdrv_cleanup(void)
