@@ -42,6 +42,42 @@ timeouts when multiple commands are sent in rapid succession, set this to
 This delay helps prevent "read timeout" errors when the hardware buffer is
 not ready to accept new commands immediately after completing the previous one.
 
+*offdelay*='num'::
+Set the delay, in seconds, used by the shutdown-related instant commands
+when no value is passed to them.  The default value is 10.
++
+The value may be overridden for a single invocation with the optional
+'value' argument of linkman:upscmd[8], for example:
++
+	upscmd -u admin -p secret myups shutdown.return 45
++
+The value passed on the command line takes precedence over this setting,
+which in turn takes precedence over the built-in default.
+
+INSTANT COMMANDS
+----------------
+
+The following instant commands accept an optional delay, in seconds, passed
+as the 'value' argument of linkman:upscmd[8]:
+
+'shutdown.return' 'seconds'::
+	Turn off the load after the given number of seconds, so that the
+	computer can finish shutting down first.  Defaults to the 'offdelay'
+	setting.
+
+'shutdown.reboot' 'seconds'::
+	Shut down the load briefly while rebooting the UPS, after the given
+	number of seconds.  Defaults to the 'offdelay' setting.
+
+'shutdown.reboot.graceful' 'seconds'::
+	Same as 'shutdown.reboot', but with a default of 60 seconds, which is
+	not affected by the 'offdelay' setting.
+
+The accepted range is 1 through 3600 seconds.  An invalid value makes the
+command fail without sending anything to the UPS.
+
+All other instant commands ignore any value passed to them.
+
 AUTHOR
 ------
 

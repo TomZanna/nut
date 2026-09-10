@@ -348,6 +348,13 @@ https://github.com/networkupstools/nut/milestone/13
  - `riello_usb`, `riello_ser` driver updates:
     * riello_usb, riello_ser: report NAK on RE as failure [issue #3546]
 
+ - `tripplitesu` driver updates:
+    * Added an `offdelay` setting in `ups.conf` and support for an optional
+      delay (in seconds), passed as the `value` argument of the
+      `shutdown.return`, `shutdown.reboot` and `shutdown.reboot.graceful`
+      instant commands, so that the timer can be chosen per invocation
+      without restarting the driver or changing its configuration.
+
  - `usbhid-ups` driver updates:
     * When reconnecting, report success more visibly (not only in debug), and
       do not reset driver state to "quiet" when it will loop trying. [PR #3423]

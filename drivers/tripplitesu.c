@@ -67,6 +67,7 @@
    The following parameters (ups.conf) are supported:
 	lowbatt
 	command_delay
+	offdelay
 
    The following variables are supported (RW = read/write):
 	ambient.humidity (1)
@@ -105,6 +106,11 @@
 	test.battery.start
 	test.battery.stop
 
+    The shutdown-related commands above accept an optional delay, in seconds,
+    passed as the "value" argument of upscmd; it takes precedence over the
+    "offdelay" setting from ups.conf, which in turn takes precedence over
+    the built-in default.
+
     The following ups.status values are supported:
 	BOOST (1)
 	BYPASS
@@ -140,6 +146,14 @@ upsdrv_info_t upsdrv_info = {
 
 #define MAX_RESPONSE_LENGTH 256
 
+/* Delay, in seconds, used by shutdown-related instant commands when the
+ * caller does not pass a value and 'offdelay' is not set in ups.conf.
+ * Note: a shutdown action value of 0 is used to cancel a scheduled
+ * shutdown (see "shutdown.stop"), so it is not accepted as a delay. */
+#define DEFAULT_OFFDELAY 10U
+#define MIN_OFFDELAY 1U
+#define MAX_OFFDELAY 3600U
+
 static const char *test_result_names[] = {
 	"No test performed",
 	"Passed",
@@ -165,6 +179,8 @@ static struct {
 } ups;
 
 static long command_delay = 0; /* delay in milliseconds before each command, 0 = no delay by default */
+static unsigned int offdelay = DEFAULT_OFFDELAY; /* delay in seconds before shutdown */
+static int offdelay_from_conf = 0; /* set if 'offdelay' was provided in ups.conf */
 
 /* bits in commands_available */
 #define WDG_AVAILABLE            (1UL <<  1)
@@ -475,13 +491,53 @@ static void auto_reboot(int enable) {
 	}
 }
 
+/* Parse a delay value (in seconds) received as an instant command value
+ * <cmdparam>, bounded to the range supported by the device protocol.
+ * Returns 1 on success and stores the result in *delay, 0 otherwise. */
+static int parse_delay(const char *val, unsigned int *delay)
+{
+	unsigned int tmp;
+
+	if (!val || !*val)
+		return 0;
+
+	if (!str_to_uint_strict(val, &tmp, 10))
+		return 0;
+
+	if (tmp < MIN_OFFDELAY || tmp > MAX_OFFDELAY)
+		return 0;
+
+	*delay = tmp;
+	return 1;
+}
+
+/* Resolve the delay (in seconds) to use for a shutdown-related command:
+ * the value passed by the caller takes precedence over the given fallback
+ * (the 'offdelay' setting from ups.conf, or the command's own default).
+ * Returns 1 on success and stores the result in *delay, 0 otherwise. */
+static int get_shutdown_delay(const char *cmdname, const char *extra,
+	unsigned int fallback, unsigned int *delay)
+{
+	*delay = fallback;
+
+	if (extra && *extra) {
+		if (!parse_delay(extra, delay)) {
+			upslogx(LOG_ERR, "instcmd(%s): invalid delay value '%s' "
+				"(expected %u..%u seconds)",
+				cmdname, extra, MIN_OFFDELAY, MAX_OFFDELAY);
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 static int instcmd(const char *cmdname, const char *extra)
 {
 	int i;
 	char parm[20];
+	unsigned int delay;
 
-	/* May be used in logging below, but not as a command argument */
-	NUT_UNUSED_VARIABLE(extra);
 	upsdebug_INSTCMD_STARTING(cmdname, extra);
 
 	if (!strcasecmp(cmdname, "load.off")) {
@@ -501,24 +557,37 @@ static int instcmd(const char *cmdname, const char *extra)
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.reboot")) {
+		if (!get_shutdown_delay(cmdname, extra, offdelay, &delay))
+			return STAT_INSTCMD_FAILED;
+
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
 		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "10", NULL);
+		snprintf(parm, sizeof(parm), "%u", delay);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.reboot.graceful")) {
+		/* This command has its own default, not affected by offdelay */
+		if (!get_shutdown_delay(cmdname, extra, 60U, &delay))
+			return STAT_INSTCMD_FAILED;
+
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
 		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "60", NULL);
+		snprintf(parm, sizeof(parm), "%u", delay);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 		return STAT_INSTCMD_HANDLED;
 	}
 	if (!strcasecmp(cmdname, "shutdown.return")) {
+		if (!get_shutdown_delay(cmdname, extra, offdelay, &delay))
+			return STAT_INSTCMD_FAILED;
+
 		upslog_INSTCMD_POWERSTATE_CHANGE(cmdname, extra);
 		auto_reboot(1);
 		do_command(SET, TSU_SHUTDOWN_RESTART, "1", NULL);
-		do_command(SET, TSU_SHUTDOWN_ACTION, "10", NULL);
+		snprintf(parm, sizeof(parm), "%u", delay);
+		do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 		return STAT_INSTCMD_HANDLED;
 	}
 #if 0 /* doesn't seem to work */
@@ -887,7 +956,10 @@ void upsdrv_shutdown(void)
 	 * it is off, this has no effect. */
 	snprintf(parm, sizeof(parm), "%d", 1); /* delay before reboot, in minutes */
 	do_command(SET, TSU_SHUTDOWN_RESTART, parm, NULL);
-	snprintf(parm, sizeof(parm), "%d", 5); /* delay before shutdown, in seconds */
+	/* delay before shutdown, in seconds: honor 'offdelay' if the user set
+	 * it in ups.conf, otherwise keep the historical default */
+	snprintf(parm, sizeof(parm), "%u",
+		offdelay_from_conf ? offdelay : 5U); /* delay before shutdown, in seconds */
 	do_command(SET, TSU_SHUTDOWN_ACTION, parm, NULL);
 }
 
@@ -903,10 +975,16 @@ void upsdrv_tweak_prognames(void)
 /* list flags and values that you want to receive via -x or ups.conf */
 void upsdrv_makevartable(void)
 {
+	char msg[256];
+
 	addvar(VAR_VALUE, "lowbatt", "Set low battery level, in percent");
 	addvar(VAR_VALUE, "command_delay", 
 		"Delay in milliseconds before each command (default: 0 = no delay; "
 		"set to 1000ms if experiencing communication timeouts)");
+
+	snprintf(msg, sizeof msg, "Set shutdown delay, in seconds (default=%u, range %u..%u).",
+		DEFAULT_OFFDELAY, MIN_OFFDELAY, MAX_OFFDELAY);
+	addvar(VAR_VALUE, "offdelay", msg);
 }
 
 void upsdrv_initups(void)
@@ -932,6 +1010,23 @@ void upsdrv_initups(void)
 		}
 	} else {
 		upsdebugx(2, "Using default command_delay of %ld (no delay)", command_delay);
+	}
+
+	/* Initialize offdelay from configuration */
+	val = getval("offdelay");
+	if (val && *val) {
+		unsigned int temp;
+		if (!str_to_uint_strict(val, &temp, 10) ||
+		    temp < MIN_OFFDELAY || temp > MAX_OFFDELAY) {
+			fatalx(EXIT_FAILURE, "Invalid offdelay parameter: %s "
+				"(expected %u..%u seconds)",
+				val, MIN_OFFDELAY, MAX_OFFDELAY);
+		}
+		offdelay = temp;
+		offdelay_from_conf = 1;
+		upsdebugx(2, "Setting offdelay to %u seconds", offdelay);
+	} else {
+		upsdebugx(2, "Using default offdelay of %u seconds", offdelay);
 	}
 }
 
