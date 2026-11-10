@@ -1,0 +1,18 @@
+{
+  "name": "Cline Sandbox Container",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "saoudrizwan.claude-dev"
+      ]
+    }
+  },
+  "mounts": [
+    "source=cline-workspace-storage,target=/home/vscode/.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev,type=volume"
+  ],
+  "runArgs": [
+    "--cap-add=SYS_ADMIN"
+  ],
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev"
+}
